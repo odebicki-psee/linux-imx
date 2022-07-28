@@ -1133,13 +1133,13 @@
 				reg = <0x30a70000 0x1000>;
 				interrupts = <GIC_SPI 44 IRQ_TYPE_LEVEL_HIGH>;
 				clocks = <&clk IMX8MQ_CLK_CSI1_CORE>,
-						<&clk IMX8MQ_CLK_CSI1_ESC>,
-						<&clk IMX8MQ_CLK_CSI1_PHY_REF>;
-				clock-names = "clk_core", "clk_esc", "clk_pxl";
+						<&clk IMX8MQ_CLK_CSI1_PHY_REF>,
+						<&clk IMX8MQ_CLK_CSI1_ESC>;
+				clock-names = "clk_core", "clk_pxl", "clk_esc";
 				assigned-clocks = <&clk IMX8MQ_CLK_CSI1_CORE>,
 						  <&clk IMX8MQ_CLK_CSI1_PHY_REF>,
 						  <&clk IMX8MQ_CLK_CSI1_ESC>;
-				assigned-clock-rates = <133000000>, <100000000>, <66000000>;
+				assigned-clock-rates = <266000000>, <333000000>, <66000000>;
 				power-domains = <&pgc_mipi_csi1>;
 				csis-phy-reset = <&src 0x4c 7>;
 				phy-gpr = <&iomuxc_gpr 0x88>;
