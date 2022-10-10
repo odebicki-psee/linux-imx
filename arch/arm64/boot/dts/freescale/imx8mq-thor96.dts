@@ -380,7 +380,7 @@
 	status = "okay";
 	port {
 		mipi1_sensor_ep: endpoint@0 {
-			remote-endpoint = <&ccam5_ep>;
+			remote-endpoint = <&psee_ep>;
 			data-lanes = <1 2>;
 			/* csis-hs-settle and csis-clk-settle are not used with the iMX8M 
 			(https://community.nxp.com/t5/i-MX-Processors/iMX8M-MIPI-CSI-4-lane-configuration/m-p/875763/highlight/true#M132950)
@@ -649,35 +649,34 @@
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_i2c3>;
 	status = "okay";
-
-	ccam5: ccam5@3c {
-		compatible = "psee,ccam5_gen41";
+/*
+	gen41: gen41@3c {
+		compatible = "psee,gen41";
 		status = "okay";
 		reg = <0x3c>;
 		pwdn-gpios = <&gpio2 11 GPIO_ACTIVE_HIGH>;
 		rst-gpios = <&gpio2 10 GPIO_ACTIVE_HIGH>;
 
 		port {
-			ccam5_ep: endpoint {
+			psee_ep: endpoint {
 				remote-endpoint = <&mipi1_sensor_ep>;
 			};
 		};
 	};
-/*
-	ccam5: ccam5@52 {
-		compatible = "psee,ccam5";
+    */
+	imx636: imx636@3c {
+		compatible = "psee,imx636";
 		status = "okay";
-		reg = <0x52>;
+		reg = <0x3c>;
 		pwdn-gpios = <&gpio2 11 GPIO_ACTIVE_HIGH>;
 		rst-gpios = <&gpio2 10 GPIO_ACTIVE_HIGH>;
 
 		port {
-			ccam5_ep: endpoint {
+			psee_ep: endpoint {
 				remote-endpoint = <&mipi1_sensor_ep>;
 			};
 		};
 	};
-*/
 	synaptics_dsx_ts: synaptics_dsx_ts@20 {
 		compatible = "synaptics_dsx";
 		reg = <0x20>;
