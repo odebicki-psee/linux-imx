@@ -11,7 +11,37 @@
  * under the License.
  *
  ********************************************************************************/
+#include <linux/clk.h>
+#include <linux/clk-provider.h>
+#include <linux/clkdev.h>
+#include <linux/ctype.h>
+#include <linux/delay.h>
+#include <linux/device.h>
+#include <linux/gpio/consumer.h>
+#include <linux/i2c.h>
+#include <linux/init.h>
+#include <linux/module.h>
+#include <linux/of_device.h>
+#include <linux/regulator/consumer.h>
+#include <linux/slab.h>
+#include <linux/types.h>
+#include <media/v4l2-async.h>
+#include <media/v4l2-ctrls.h>
+#include <media/v4l2-device.h>
+#include <media/v4l2-event.h>
+#include <media/v4l2-fwnode.h>
+#include <media/v4l2-subdev.h>
 #include "psee-issd.h"
+#include "psee-gen4-ops.h"
+
+static unsigned int issd_idx;
+module_param(issd_idx, uint, 0444);
+MODULE_PARM_DESC(issd_idx,
+                 "PSEE Gen41 sensor driver: default issd_idx=0 for streaming");
+
+#define GEN41_DRV_NAME "psee-gen41"
+#define GEN41_DRV_DESC "PSEE Gen41 sensor driver"
+
 
 static const struct reg_op gen41_issd_stream_init_seq[] = {
     //    {.op = PSEE_WRITE, .args = {.write = {0x0000001CUL, 0x00000001}}},
@@ -1379,15 +1409,9 @@ unsigned int gen41_issd(const struct issd **issd_array[])
     return ARRAY_SIZE(gen41_issds);
 }
 
-#define CCAM5_SYS_ID     0x14
-
-extern int gen4_ctl_init_controls(struct sensor_dev *sensor);
-extern const struct media_entity_operations  gen4_sensor_sd_media_ops;
-extern const struct v4l2_subdev_internal_ops gen4_sensor_internal_ops;
-
 static int sensor_probe(struct i2c_client *client) {
 	struct sensor_dev *sensor;
-	u32 sensor_id, misc;
+	u32 sensor_id;
 	int ret;
 
 	sensor = devm_kzalloc(&client->dev, sizeof(*sensor), GFP_KERNEL);
@@ -1410,54 +1434,32 @@ static int sensor_probe(struct i2c_client *client) {
 		goto error_probe;
 	}
 
-	/* Power Up and reset the camera. */
-	ret = sensor_set_power(sensor, 1);
+	/* Initialize subdev */
+    ret = gen4_init_sensor_dev(sensor, client);
 	if (ret) {
-		dev_err(&client->dev, "failed to reset the camera.");
+		dev_err(&client->dev, "failed to initialize subdev: %d.", ret);
 		goto error_probe;
 	}
 
-	/* Initialize subdev */
-	v4l2_i2c_subdev_init(&sensor->sd, client, &sensor_subdev_ops);
-
-	strscpy(sensor->sd.name, CCAM5_DRV_NAME, sizeof(sensor->sd.name));
+	strscpy(sensor->sd.name, GEN41_DRV_NAME, sizeof(sensor->sd.name));
 	dev_info(&client->dev, "%s Subdev initialized\n", sensor->sd.name);
 
-	sensor->sd.internal_ops = &sensor_internal_ops;
-	sensor->sd.flags |= V4L2_SUBDEV_FL_IS_I2C;
-	sensor->sd.flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
-
-	sensor->sd.grp_id = 678;
-	sensor->sd.entity.ops = &sensor_sd_media_ops;
-	sensor->sd.entity.function = MEDIA_ENT_F_CAM_SENSOR;
-
-	/* Initialize source pad */
-	sensor->pad.flags = MEDIA_PAD_FL_SOURCE;
-	ret = media_entity_pads_init(&sensor->sd.entity, 1, &sensor->pad);
-	if (ret) {
-		dev_err(&client->dev, "failed to init entity pads: %d.", ret);
-		goto error_handler_free;
-	}
-
 	/* Identify the camera */
-	sensor->issd_idx = issd_idx;
-	ret = sensor_read_reg(client, CCAM5_SYS_ID, &sensor_id);
+    ret = gen4_get_camera_id(sensor, &sensor_id);
 	if (ret) {
 		dev_err(&client->dev, "failed to identify the sensor.");
-		goto error_probe;
+		goto error_handler_free;
 	}
-
 	if (sensor_id == 0xa0301002) {
 		dev_info(&client->dev, "Prophesee gen41 ES (id: 0x%x) sensor detected", sensor_id);
 		sensor->issd_size =  gen41_issd(&sensor->issd);
-		ret = psee_ctl_init_controls(sensor);
+    	sensor->issd_idx = issd_idx;
+		ret = gen4_ctl_init_controls(sensor);
 	}
 	else {
 		dev_err(&client->dev, "Not a Prophesee gen41 ES sensor: %d.", sensor_id);
 		ret = -ENODEV;
 	}
-	if (ret)
-		goto error_probe;
 
 	ret = v4l2_async_register_subdev(&sensor->sd);
 	if (ret) {
@@ -1479,31 +1481,6 @@ error_probe:
 	return ret;
 }
 
-static int sensor_remove(struct i2c_client *client)
-{
-	struct v4l2_subdev *sd = i2c_get_clientdata(client);
-	struct sensor_dev *sensor = sd_to_sensor_dev(sd);
-
-	v4l2_async_unregister_subdev(&sensor->sd);
-	media_entity_cleanup(&sensor->sd.entity);
-	v4l2_ctrl_handler_free(&sensor->ctrl_handler);
-
-	mutex_destroy(&sensor->mutex);
-
-	return 0;
-}
-
-
-
-static unsigned int issd_idx;
-module_param(issd_idx, uint, 0444);
-MODULE_PARM_DESC(issd_idx,
-                 "PSEE Gen41 sensor driver: default issd_idx=0 for streaming");
-
-#define GEN41_DRV_NAME "psee-gen41"
-#define GEN41_DRV_DESC "PSEE Gen41 sensor driver"
-
-
 static const struct i2c_device_id sensor_id[] = {
         {"psee_gen41", 0},
         {},
@@ -1524,7 +1501,7 @@ static struct i2c_driver sensor_i2c_driver = {
         },
         .id_table = sensor_id,
         .probe_new = sensor_probe,
-        .remove   = sensor_remove,
+        .remove   = gen4_sensor_remove,
 };
 
 module_i2c_driver(sensor_i2c_driver);

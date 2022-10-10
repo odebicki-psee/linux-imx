@@ -33,6 +33,7 @@
 #include <media/v4l2-fwnode.h>
 #include <media/v4l2-subdev.h>
 #include "psee-issd.h"
+#include "psee-gen4-ops.h"
 
 #define CCAM5_FMT32_DESC "Prophesee 32-bit Event raw format"
 #define CCAM5_FMT16_DESC "Prophesee 16-bit Event raw format"
@@ -44,29 +45,7 @@
 #define MEDIA_BUS_FMT_PSEE16                    0x5003
 #define MEDIA_BUS_FMT_PSEE32                    0x5004
 
-struct sensor_dev {
-	struct v4l2_subdev sd;
-	struct media_pad pad;
 
-	struct v4l2_ctrl_handler ctrl_handler;
-    struct v4l2_ctrl **ctrls;
-    unsigned int nb_ctrls;
-    // Several ISSD sequences may be available for a sensor.
-    // The first one is the default, others corresponds to test
-    // pattern activation.
-    const struct issd **issd;
-    int issd_size;  /* Number of ISSD sequences available. */
-    unsigned int issd_idx;  /* Current sequence index */
-
-    struct v4l2_ctrl *reg_ctrl;
-
-	struct gpio_desc *reset_gpio;
-	struct gpio_desc *pwdn_gpio;
-
-    bool is_powered;
-
-	struct mutex mutex;
-};
 
 /* Aliases to get access to sensor_dev. */
 static inline struct sensor_dev *sd_to_sensor_dev(struct v4l2_subdev *sd)
@@ -82,7 +61,7 @@ static inline const struct issd *sensor_issd(struct sensor_dev *sensor)
     return sensor->issd[sensor->issd_idx];
 }
 
-static int sensor_set_power(struct sensor_dev *sensor, int on) {
+int sensor_set_power(struct sensor_dev *sensor, int on) {
 	if (!sensor->reset_gpio || !sensor->pwdn_gpio) {
 		printk(KERN_ERR "%s:%d\n", __func__, __LINE__);
 		return -1;
@@ -409,7 +388,7 @@ static int sensor_link_setup(struct media_entity *entity,
 {
 	return 0;
 }
-const struct media_entity_operations gen4_sensor_sd_media_ops = {
+static const struct media_entity_operations sensor_sd_media_ops = {
 	.link_setup = sensor_link_setup,
 };
 
@@ -497,7 +476,7 @@ static int sensor_video_s_stream (struct v4l2_subdev *sd, int enable)
 
 	return ret;
 }
-static struct v4l2_subdev_video_ops sensor_video_ops = {
+static const struct v4l2_subdev_video_ops sensor_video_ops = {
 	.querystd = &sensor_video_querystd,
 	.s_stream = &sensor_video_s_stream,
 };
@@ -673,9 +652,65 @@ static int sensor_open(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
 	return 0;
 }
 
-const struct v4l2_subdev_internal_ops gen4_sensor_internal_ops = {
+static const struct v4l2_subdev_internal_ops sensor_internal_ops = {
 	.open = sensor_open,
 };
 
-/* =============== Probe =============== */
+int gen4_init_sensor_dev(struct sensor_dev *sensor, struct i2c_client *client)
+{
+    int ret;
+
+	v4l2_i2c_subdev_init(&sensor->sd, client, &sensor_subdev_ops);
+
+	sensor->sd.internal_ops = &sensor_internal_ops;
+	sensor->sd.flags |= V4L2_SUBDEV_FL_IS_I2C;
+	sensor->sd.flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
+
+	sensor->sd.grp_id = 678;
+	sensor->sd.entity.ops = &sensor_sd_media_ops;
+	sensor->sd.entity.function = MEDIA_ENT_F_CAM_SENSOR;
+
+	/* Initialize source pad */
+	sensor->pad.flags = MEDIA_PAD_FL_SOURCE;
+	ret = media_entity_pads_init(&sensor->sd.entity, 1, &sensor->pad);
+
+    return ret;
+}
+
+/* System ID Register address */
+#define CCAM5_SYS_ID 0x14
+
+/* Identify the camera */
+int gen4_get_camera_id(struct sensor_dev *sensor, u32 *sensor_id)
+{
+   	struct i2c_client *client = v4l2_get_subdevdata(&sensor->sd);
+    int ret;
+
+	/* Power Up and reset the camera. */
+	ret = sensor_set_power(sensor, 1);
+	if (ret) 
+        return ret;
+
+	ret = sensor_read_reg(client, CCAM5_SYS_ID, sensor_id);
+
+    sensor_set_power(sensor, 0);
+    return ret;
+
+}
+
+int gen4_sensor_remove(struct i2c_client *client)
+{
+	struct v4l2_subdev *sd = i2c_get_clientdata(client);
+	struct sensor_dev *sensor = sd_to_sensor_dev(sd);
+
+	v4l2_async_unregister_subdev(&sensor->sd);
+	media_entity_cleanup(&sensor->sd.entity);
+	v4l2_ctrl_handler_free(&sensor->ctrl_handler);
+
+	mutex_destroy(&sensor->mutex);
+
+	return 0;
+}
+
+
 
