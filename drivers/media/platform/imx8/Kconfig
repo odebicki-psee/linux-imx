@@ -5,6 +5,11 @@ config IMX8_MIPI_CSI2_YAV
 	tristate "IMX8 MIPI CSI2 Controller Yet Another Version"
 	default y
 
+config IMX8_PSEE_CAPTURE
+	tristate "IMX8MQ MIPI driver for Prophesee Gen3 and Gen4 Event Based Camera"
+	select IMX8_MIPI_CSI2_YAV
+	default y
+
 config IMX8_JPEG
 	tristate "IMX8 JPEG Encoder/Decoder"
 	depends on VIDEO_V4L2 && VIDEO_V4L2_SUBDEV_API
