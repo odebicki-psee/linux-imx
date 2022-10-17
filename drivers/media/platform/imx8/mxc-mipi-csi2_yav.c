@@ -292,7 +292,18 @@ static int mipi_csi2_open(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
  */
 static int mipi_csi2_s_power(struct v4l2_subdev *sd, int on)
 {
-	return 0;
+	struct mxc_mipi_csi2_dev *csi2dev = sd_to_mxc_mipi_csi2_dev(sd);
+	struct device *dev = &csi2dev->pdev->dev;
+	struct v4l2_subdev *sensor_sd = csi2dev->sensor_sd;
+
+	v4l2_subdev_call(sensor_sd, core, s_power, on);
+
+	dev_info(&csi2dev->pdev->dev, "%s:%d (%d)\n", __func__, __LINE__, on);
+
+	if (on)
+		return pm_runtime_get_sync(dev);
+	else
+		return pm_runtime_put_sync(dev);
 }
 
 static int mipi_csi2_s_stream(struct v4l2_subdev *sd, int enable)
@@ -409,6 +420,22 @@ static int mipi_csis_g_parm(struct v4l2_subdev *sd, struct v4l2_streamparm *a)
 	return v4l2_subdev_call(sensor_sd, video, g_parm, a);
 }
 
+static int mipi_csi_querystd(struct v4l2_subdev *sd, v4l2_std_id *a)
+{
+	struct mxc_mipi_csi2_dev *csi2dev = sd_to_mxc_mipi_csi2_dev(sd);
+	struct v4l2_subdev *sensor_sd = csi2dev->sensor_sd;
+
+	return v4l2_subdev_call(sensor_sd, video, querystd, a);
+}
+
+static int mipi_csi_s_std(struct v4l2_subdev *sd, v4l2_std_id a)
+{
+	struct mxc_mipi_csi2_dev *csi2dev = sd_to_mxc_mipi_csi2_dev(sd);
+	struct v4l2_subdev *sensor_sd = csi2dev->sensor_sd;
+
+	return v4l2_subdev_call(sensor_sd, video, s_std, a);
+}
+
 static const struct v4l2_subdev_internal_ops mipi_csi2_sd_internal_ops = {
 	.open = mipi_csi2_open,
 };
@@ -430,6 +457,8 @@ static struct v4l2_subdev_video_ops mipi_csi2_video_ops = {
 
 	.s_parm = mipi_csis_s_parm,
 	.g_parm = mipi_csis_g_parm,
+	.querystd = mipi_csi_querystd,
+	.s_std = mipi_csi_s_std,
 };
 
 static struct v4l2_subdev_ops mipi_csi2_subdev_ops = {
@@ -493,8 +522,19 @@ static int subdev_notifier_bound(struct v4l2_async_notifier *notifier,
 	return 0;
 }
 
+static int subdev_notifier_complete(struct v4l2_async_notifier *notifier)
+{
+	struct mxc_mipi_csi2_dev *csi2dev = notifier_to_mipi_dev(notifier);
+	
+	dev_info(&csi2dev->pdev->dev, "%s:%d\n", __func__, __LINE__);
+
+	// Register device nodes for all subdevs marked with the V4L2_SUBDEV_FL_HAS_DEVNODE flag
+	return v4l2_device_register_subdev_nodes(&csi2dev->v4l2_dev);
+}
+
 static const struct v4l2_async_notifier_operations subdev_notifier_ops = {
 	.bound = subdev_notifier_bound,
+	.complete = subdev_notifier_complete,
 };
 
 static int mipi_csis_subdev_host(struct mxc_mipi_csi2_dev *csi2dev)
