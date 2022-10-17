@@ -62,18 +62,20 @@ static inline const struct issd *sensor_issd(struct sensor_dev *sensor)
 }
 
 int sensor_set_power(struct sensor_dev *sensor, int on) {
+	struct i2c_client *client = v4l2_get_subdevdata(&sensor->sd);
+
 	if (!sensor->reset_gpio || !sensor->pwdn_gpio) {
-		printk(KERN_ERR "%s:%d\n", __func__, __LINE__);
+	    dev_err(&client->dev, "%s: Sensor not initialized.", __func__);
 		return -1;
 	}
 
 	if (on) {
 		if (sensor->is_powered == true) {
-			printk(KERN_ERR "%s:%d\n", __func__, __LINE__);
+    	    dev_info(&client->dev, "%s: Sensor already powered.", __func__);
 			return 0;
 		}
 
-		printk(KERN_ERR "%s: on\n", __func__);
+   	    dev_info(&client->dev, "%s: Sensor power on.", __func__);
 
 //		gpiod_set_value(sensor->reset_gpio, 0);
 //		gpiod_set_value(sensor->pwdn_gpio, 0);
@@ -86,7 +88,7 @@ int sensor_set_power(struct sensor_dev *sensor, int on) {
 		msleep(50);
 		sensor->is_powered = true;
 	} else {
-		printk(KERN_ERR "%s: off\n", __func__);
+   	    dev_info(&client->dev, "%s: Sensor power off.", __func__);
 
 		gpiod_set_value(sensor->reset_gpio, 0);
 		gpiod_set_value(sensor->pwdn_gpio, 0);
@@ -189,12 +191,12 @@ static int sensor_read_reg(struct i2c_client *client, u32 reg, u32 *val)
 
 	*val = (buf[0]<<24) + (buf[1]<<16) + (buf[2]<<8) + buf[3];
 
-	dev_info(&client->dev, "Reading register 0x%08x = 0x%08x\n", reg, *val);
+	dev_info(&client->dev, "%s: Reading register 0x%08x = 0x%08x\n", __func__, reg, *val);
 
 	return 0;
 
 err:
-	dev_err(&client->dev, "%s: error reading register reg=0x%08x\n", __func__, reg);
+	dev_err(&client->dev, "%s: Error reading register reg=0x%08x (%d)\n", __func__, reg, ret);
 	return ret;
 }
 static int sensor_exec(struct sensor_dev *sensor, const struct sequence *seq)
