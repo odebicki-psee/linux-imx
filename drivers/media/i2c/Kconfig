@@ -719,37 +719,13 @@ endmenu
 menu "Camera sensor devices"
 	visible if MEDIA_CAMERA_SUPPORT
 
-config VIDEO_PSEE_IMX636
-        tristate "Prophesee/Sony IMX636 sensor support."
+config VIDEO_PSEE_EB_CTL
+        tristate "Prophesee sensor support."
         depends on I2C && VIDEO_V4L2
 	select MEDIA_CONTROLLER
 	select VIDEO_V4L2_SUBDEV_API
         help
-          This is a driver for the Prophesee/Sony IMX636 Event Based sensor. It controls
-          Init, Start, Stop and Destroy sequences.
-
-	  To compile this driver as a module, choose M here: the
-	  module will be called psee-ctl.
-
-config VIDEO_PSEE_GEN41
-        tristate "Prophesee Gen41 sensor support."
-        depends on I2C && VIDEO_V4L2
-	select MEDIA_CONTROLLER
-	select VIDEO_V4L2_SUBDEV_API
-        help
-          This is a driver for the Prophesee Gen41 Event Based sensor. It controls
-          Init, Start, Stop and Destroy sequences.
-
-	  To compile this driver as a module, choose M here: the
-	  module will be called psee-ctl.
-
-config VIDEO_PSEE_GENX320
-        tristate "Prophesee GenX320 sensor support."
-        depends on I2C && VIDEO_V4L2
-	select MEDIA_CONTROLLER
-	select VIDEO_V4L2_SUBDEV_API
-        help
-          This is a driver for the Prophesee GenX329 Event Based sensor. It controls
+          This is a driver for the Prophesee Event Based sensors. It controls
           Init, Start, Stop and Destroy sequences.
 
 	  To compile this driver as a module, choose M here: the

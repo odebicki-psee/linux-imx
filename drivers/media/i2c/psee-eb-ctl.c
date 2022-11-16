@@ -11,7 +11,6 @@
  * under the License.
  *
  ********************************************************************************/
-
 #include <linux/clk.h>
 #include <linux/clk-provider.h>
 #include <linux/clkdev.h>
@@ -33,7 +32,19 @@
 #include <media/v4l2-fwnode.h>
 #include <media/v4l2-subdev.h>
 #include "psee-issd.h"
-#include "psee-gen4-ops.h"
+
+static unsigned int issd_idx;
+module_param(issd_idx, uint, 0444);
+MODULE_PARM_DESC(issd_idx,
+                 "PSEE Event Based sensor driver: default issd_idx=0 for streaming");
+
+#define PSEE_EB_DRV_NAME "psee-eb-sensor"
+#define PSEE_EB_DRV_DESC "PSEE Event Based sensor driver"
+
+
+extern unsigned int gen41_issd(const struct issd **issd_array[]);
+extern unsigned int imx636_issd(const struct issd **issd_array[]);
+extern unsigned int genx320_issd(const struct issd **issd_array[]);
 
 #define CCAM5_FMT32_DESC "Prophesee 32-bit Event raw format"
 #define CCAM5_FMT16_DESC "Prophesee 16-bit Event raw format"
@@ -45,6 +56,40 @@
 #define MEDIA_BUS_FMT_PSEE16                    0x5003
 #define MEDIA_BUS_FMT_PSEE32                    0x5004
 
+enum sensor_id {
+	UNKNOWN = 0,
+	IMX636,
+	GEN41,
+	GENX320
+};
+
+struct sensor_dev {
+	struct v4l2_subdev sd;
+	struct media_pad pad;
+
+	struct v4l2_ctrl_handler ctrl_handler;
+	struct v4l2_ctrl **ctrls;
+	unsigned int nb_ctrls;
+	// Several ISSD sequences may be available for a sensor.
+	// The first one is the default, others corresponds to test
+	// pattern activation.
+	const struct issd **issd;
+	int issd_size; /* Number of ISSD sequences available. */
+	unsigned int issd_idx; /* Current sequence index */
+
+	struct v4l2_ctrl *reg_ctrl;
+
+	struct gpio_desc *reset_gpio;
+	struct gpio_desc *pwdn_gpio;
+
+	bool is_powered;
+	enum sensor_id id;
+
+	int (*write_reg)(struct i2c_client *client, u32 reg, u32 val);
+	int (*read_reg)(struct i2c_client *client, u32 reg, u32 *val);
+
+	struct mutex mutex;
+};
 
 
 /* Aliases to get access to sensor_dev. */
@@ -75,11 +120,11 @@ int sensor_set_power(struct sensor_dev *sensor, int on) {
 			return 0;
 		}
 
-   	    dev_info(&client->dev, "%s: Sensor power on.", __func__);
+		dev_info(&client->dev, "%s: Sensor power on.", __func__);
 
-//		gpiod_set_value(sensor->reset_gpio, 0);
-//		gpiod_set_value(sensor->pwdn_gpio, 0);
-//		msleep(5);
+		gpiod_set_value(sensor->reset_gpio, 0);
+		gpiod_set_value(sensor->pwdn_gpio, 0);
+		msleep(5);
 
 		gpiod_set_value(sensor->pwdn_gpio, 1);
 		msleep(2000);
@@ -97,8 +142,6 @@ int sensor_set_power(struct sensor_dev *sensor, int on) {
 	}
 	return 0;
 }
-
-/* ISSD initialization */
 
 /* Some sensor registers values can be modified through v4l2_ctrl interface.
    sensor_update_issd_op returns the most recent register value. */
@@ -126,12 +169,48 @@ static u32 sensor_update_write_op(const struct sensor_dev *sensor, const struct 
     return val;
 }
 
+/* ================= I2C Register R/W operations ================= */
+
 /* Sensor register access through I2C subdev interface */
-static int sensor_write_reg(struct i2c_client *client, const u32 reg, const u32 val)
+static inline int sensor_write_reg(struct i2c_client *client, u8 *buf, u8 len)
 {
 	struct i2c_msg msg;
-	u8 buf[8] = {0};
 	int ret;
+
+	msg.addr = client->addr;
+	msg.flags = client->flags;
+	msg.buf = buf;
+	msg.len = len;
+
+	ret = i2c_transfer(client->adapter, &msg, 1);
+	if (ret < 0)
+		return ret;
+	return 0;
+}
+
+static inline int sensor_read_reg(struct i2c_client *client, u32 *val)
+{
+	struct i2c_msg msg;
+	u8 buf[4] = {0};
+	int ret;
+
+	msg.addr = client->addr;
+	msg.flags = I2C_M_RD;
+	msg.buf = buf;
+	msg.len = sizeof(buf);
+	
+	ret = i2c_transfer(client->adapter, &msg, 1);
+	if (ret < 0)
+		return ret;
+
+	*val = (buf[0]<<24) + (buf[1]<<16) + (buf[2]<<8) + buf[3];
+	return 0;
+
+}
+
+static int sensor_write_reg_32(struct i2c_client *client, u32 reg, u32 val)
+{
+	u8 buf[8] = {0};
 
 	dev_info(&client->dev, "Writing register 0x%08x = 0x%08x\n", reg, val);
 
@@ -147,58 +226,80 @@ static int sensor_write_reg(struct i2c_client *client, const u32 reg, const u32 
 	buf[6] = (uint8_t)((val & 0x0000ff00) >> 8);
 	buf[7] = (uint8_t)(val & 0x000000ff);
 
-
-	msg.addr = client->addr;
-	msg.flags = client->flags;
-	msg.buf = buf;
-	msg.len = sizeof(buf);
-
-	ret = i2c_transfer(client->adapter, &msg, 1);
-	if (ret < 0) {
-		dev_err(&client->dev, "%s error writing reg=0x%08x, val=0x%x, err = %d\n",
-			__func__, reg, val, ret);
-		return ret;
-	}
-
-	return 0;
+	return sensor_write_reg(client, buf, sizeof(buf));
 }
-static int sensor_read_reg(struct i2c_client *client, u32 reg, u32 *val)
+static int sensor_write_reg_16(struct i2c_client *client, u32 reg, u32 val)
 {
-	struct i2c_msg msg;
-	u8 buf[4] = {0};
-	int ret;
+	u8 buf[6] = {0};
 
-	msg.addr = client->addr;
-	msg.flags = client->flags;
-	msg.buf = buf;
-	msg.len = sizeof(buf);
+	dev_info(&client->dev, "Writing register 0x%04x = 0x%08x\n", reg, val);
+
+	// Write reg addr
+	buf[0] = (uint8_t)((reg & 0x0000ff00) >> 8);
+	buf[1] = (uint8_t)(reg & 0x000000ff);
+
+	// Write value
+	buf[2] = (uint8_t)((val & 0xff000000) >> 24);
+	buf[3] = (uint8_t)((val & 0x00ff0000) >> 16);
+	buf[4] = (uint8_t)((val & 0x0000ff00) >> 8);
+	buf[5] = (uint8_t)(val & 0x000000ff);
+
+	return sensor_write_reg(client, buf, sizeof(buf));
+}
+
+
+static inline int sensor_read_reg_32(struct i2c_client *client,  u32 reg, u32 *val)
+{
+	u8 buf[4];
+	int ret;
 
 	buf[0] = (uint8_t)((reg & 0xff000000) >> 24);
 	buf[1] = (uint8_t)((reg & 0x00ff0000) >> 16);
 	buf[2] = (uint8_t)((reg & 0x0000ff00) >> 8);
 	buf[3] = (uint8_t)(reg & 0x000000ff);
-
-	ret = i2c_transfer(client->adapter, &msg, 1);
-	if (ret < 0)
-		goto err;
+	ret = sensor_write_reg(client, buf, sizeof(buf));
+	if (ret < 0) {
+		dev_err(&client->dev, "Error reading register 0x%08x while sending the address (%d).", reg, ret);
+		return ret;
+	}
 
 	usleep_range(100, 200);	// delay 50us
 
-	msg.flags = I2C_M_RD;
-	ret = i2c_transfer(client->adapter, &msg, 1);
+	ret = sensor_read_reg(client, val);
 	if (ret < 0)
-		goto err;
+		dev_err(&client->dev, "Error reading register 0x%08x.", reg);
+	else
+		dev_info(&client->dev, "Reading register 0x%08x = 0x%08x\n", reg, *val);
 
-	*val = (buf[0]<<24) + (buf[1]<<16) + (buf[2]<<8) + buf[3];
-
-	dev_info(&client->dev, "%s: Reading register 0x%08x = 0x%08x\n", __func__, reg, *val);
-
-	return 0;
-
-err:
-	dev_err(&client->dev, "%s: Error reading register reg=0x%08x (%d)\n", __func__, reg, ret);
 	return ret;
 }
+
+static inline int sensor_read_reg_16(struct i2c_client *client, u32 reg, u32 *val)
+{
+	u8 buf[2];
+	int ret;
+
+	buf[0] = (uint8_t)((reg & 0x0000ff00) >> 8);
+	buf[1] = (uint8_t)(reg & 0x000000ff);
+	ret = sensor_write_reg(client, buf, sizeof(buf));
+	if (ret < 0) {
+		dev_err(&client->dev, "Error reading register 0x%04x while sending the address (%d).", reg, ret);
+		return ret;
+	}
+
+	usleep_range(100, 200);	// delay 50us
+
+	ret = sensor_read_reg(client, val);
+	if (ret < 0)
+		dev_err(&client->dev, "Error reading register 0x%04x.", reg);
+	else
+		dev_info(&client->dev, "Reading register 0x%04x = 0x%08x\n", reg, *val);
+
+	return ret;
+}
+
+/* ================= Execution of ISSD sequence ================= */
+
 static int sensor_exec(struct sensor_dev *sensor, const struct sequence *seq)
 {
 	struct i2c_client *client = v4l2_get_subdevdata(&sensor->sd);
@@ -208,13 +309,13 @@ static int sensor_exec(struct sensor_dev *sensor, const struct sequence *seq)
 	u32 val;
 	s32 timeout;
 
-	dev_info(&client->dev, "%s: Executing sequence %s\n", __func__, seq->name);
+	dev_info(&client->dev, "%s: Executing sequence %s (%d operations)\n", __func__, seq->name, seq->len);
 
 	for (i = 0; i < seq->len; ++i) {
 		if (op->op == PSEE_READ) {
 			timeout = 100;
 			while (timeout--) {
-				ret = sensor_read_reg(client,
+				ret = sensor->read_reg(client,
 				op->args.read.addr, &val);
 				if (val == op->args.read.data)
 					break;
@@ -224,7 +325,7 @@ static int sensor_exec(struct sensor_dev *sensor, const struct sequence *seq)
 		}
 		else if (op->op == PSEE_WRITE) {
 			val = sensor_update_write_op(sensor, &op->args.write);
-			ret = sensor_write_reg(client,
+			ret = sensor->write_reg(client,
 				op->args.write.addr,
 				val);
 		}
@@ -261,7 +362,7 @@ static int sensor_g_reg_ctrl(struct v4l2_ctrl *ctrl)
         __func__, __LINE__,
         reg_addr, ctrl->val);
     mutex_lock (&sensor->mutex);
-    ret = sensor_read_reg(client, reg_addr, &ctrl->val);
+    ret = sensor->read_reg(client, reg_addr, &ctrl->val);
     mutex_unlock (&sensor->mutex);
     return ret;
 }
@@ -278,7 +379,7 @@ static int sensor_s_reg_ctrl(struct v4l2_ctrl *ctrl)
     reg_addr = (u32)(size_t)ctrl->priv;
     dev_info(&client->dev, "%s:%d Writing register 1 0x%08x = 0x%08x\n", __func__, __LINE__, reg_addr, ctrl->val);
     mutex_lock (&sensor->mutex);
-    ret = sensor_write_reg(client, reg_addr, ctrl->val);
+    ret = sensor->write_reg(client, reg_addr, ctrl->val);
     mutex_unlock (&sensor->mutex);
     return ret;
 }
@@ -288,7 +389,7 @@ static const struct v4l2_ctrl_ops sensor_reg_ctrl_ops = {
 };
 
 /* Control interface: get/set the active issd set of sequences. */
-static int gen41_g_issd_ctrl(struct v4l2_ctrl *ctrl)
+static int g_issd_ctrl(struct v4l2_ctrl *ctrl)
 {
     struct sensor_dev *sensor = ctrl_to_sensor_dev(ctrl->handler);
     mutex_lock (&sensor->mutex);
@@ -296,7 +397,7 @@ static int gen41_g_issd_ctrl(struct v4l2_ctrl *ctrl)
     mutex_unlock (&sensor->mutex);
     return 0;
 }
-static int gen41_s_issd_ctrl(struct v4l2_ctrl *ctrl)
+static int s_issd_ctrl(struct v4l2_ctrl *ctrl)
 {
     struct sensor_dev *sensor = ctrl_to_sensor_dev(ctrl->handler);
     mutex_lock (&sensor->mutex);
@@ -305,9 +406,9 @@ static int gen41_s_issd_ctrl(struct v4l2_ctrl *ctrl)
     mutex_unlock (&sensor->mutex);
     return 0;
 }
-static const struct v4l2_ctrl_ops gen41_issd_ctrl_ops = {
-    .g_volatile_ctrl = gen41_g_issd_ctrl,
-	.s_ctrl = gen41_s_issd_ctrl,
+static const struct v4l2_ctrl_ops issd_ctrl_ops = {
+    .g_volatile_ctrl = g_issd_ctrl,
+	.s_ctrl = s_issd_ctrl,
 };
 
 /* Control interface: init device controls. */
@@ -360,7 +461,7 @@ static int sensor_init_controls(
 
 
 /* Control interface: Defines active controls for GEN4.1 */
-const struct sensor_ctrl_desc  gen41_ctrl_desc[] = {
+const struct sensor_ctrl_desc  ctrl_desc[] = {
 	/*           i_id,  i_ops,               i_name,     i_min,  i_max, i_def) */
 //	{sensor_ctrl_cfg(0, &sensor_reg_ctrl_ops,  "pr",           0,    100,    50), .priv = (void *)(0x00001000UL + sizeof(u32) * 0)},
 //	{sensor_ctrl_cfg(1, &sensor_reg_ctrl_ops,  "fo_n",        10,     40,    30), .priv = (void *)(0x00001000UL + sizeof(u32) * 1)},
@@ -369,15 +470,15 @@ const struct sensor_ctrl_desc  gen41_ctrl_desc[] = {
 //	{sensor_ctrl_cfg(4, &sensor_reg_ctrl_ops,  "diff",         0,    150,    90), .priv = (void *)(0x00001000UL + sizeof(u32) * 4)},
 //	{sensor_ctrl_cfg(5, &sensor_reg_ctrl_ops,  "diff_off",     0,     60,    30), .priv = (void *)(0x00001000UL + sizeof(u32) * 5)},
 //	{sensor_ctrl_cfg(6, &sensor_reg_ctrl_ops,  "refr",         0,    120,    10), .priv = (void *)(0x00001000UL + sizeof(u32) * 6)},
-//	{sensor_ctrl_cfg(7, &sensor_reg_ctrl_ops,  "frame_period", 0, 0xffff, 20000), .priv = (void *)(0x00001508UL)},
+	{sensor_ctrl_cfg(7, &sensor_reg_ctrl_ops,  "frame_period", 0, 0xffff, 20000), .priv = (void *)(0x0000B028UL)},
 //	{sensor_ctrl_cfg(8, &sensor_reg_ctrl_ops,  "speed",        1,      1,     1), .priv = (void *)(0x0000023CUL)},
-	{sensor_ctrl_cfg(9, &gen41_issd_ctrl_ops, "issd",         0,      100, 0), .priv = (void *)0},
+	{sensor_ctrl_cfg(9, &issd_ctrl_ops, "issd",         0,      100, 0), .priv = (void *)0},
 };
-int gen4_ctl_init_controls(struct sensor_dev *sensor)
+static int init_controls(struct sensor_dev *sensor)
 {
-    sensor->nb_ctrls = ARRAY_SIZE(gen41_ctrl_desc);
-	sensor->ctrls = devm_kzalloc(sensor->sd.dev, ARRAY_SIZE(gen41_ctrl_desc) * sizeof(struct v4l2_ctrl *), GFP_KERNEL);
-	return sensor_init_controls(sensor, gen41_ctrl_desc);
+    sensor->nb_ctrls = ARRAY_SIZE(ctrl_desc);
+	sensor->ctrls = devm_kzalloc(sensor->sd.dev, ARRAY_SIZE(ctrl_desc) * sizeof(struct v4l2_ctrl *), GFP_KERNEL);
+	return sensor_init_controls(sensor, ctrl_desc);
 }
 
 
@@ -444,7 +545,8 @@ static int sensor_video_querystd(struct v4l2_subdev *sd, v4l2_std_id *a)
 static int sensor_video_s_stream (struct v4l2_subdev *sd, int enable)
 {
 	struct sensor_dev *sensor = sd_to_sensor_dev(sd);
-   	struct i2c_client *client = v4l2_get_subdevdata(&sensor->sd);
+	struct i2c_client *client = v4l2_get_subdevdata(&sensor->sd);
+	u32 mipi_stat_frame_cnt, mipi_stat_byte_cnt, mipi_stat_pad_cnt, mipi_stat_pkt_cnt, mipi_stat_inc_pkt_cnt, mipi_stat_frame_period;
 
 	const struct issd *issd = sensor_issd(sensor);
 	int ret = 0;
@@ -455,17 +557,32 @@ static int sensor_video_s_stream (struct v4l2_subdev *sd, int enable)
 	dev_info(sd->dev, "%s: sensor_s_stream (%d)\n", __func__, enable);
 
 	mutex_lock(&sensor->mutex);
-    ret = sensor_read_reg(client, 0x00007000, &pipeline_control);
+    ret = sensor->read_reg(client, 0x00007000, &pipeline_control);
     dev_info(sd->dev, "%s: pipeline_control = 0x%08x", __func__, pipeline_control);
 
 	ret = sensor_exec(sensor, (enable) ? &issd->start : &issd->stop);
     if (enable) {
+		mipi_stat_frame_cnt = 0;
+        while (mipi_stat_frame_cnt < 20) {
+			sensor->read_reg(client, 0x0000b084, &mipi_stat_frame_cnt);
+			sensor->read_reg(client, 0x0000b088, &mipi_stat_byte_cnt);
+			sensor->read_reg(client, 0x0000b08c, &mipi_stat_pad_cnt);
+			sensor->read_reg(client, 0x0000b090, &mipi_stat_pkt_cnt);
+			sensor->read_reg(client, 0x0000b094, &mipi_stat_inc_pkt_cnt);
+			sensor->read_reg(client, 0x0000b098, &mipi_stat_frame_period);
+			dev_info(sd->dev, "%s: mipi_stat_frame_cnt = 0x%08x", __func__, mipi_stat_frame_cnt);
+			dev_info(sd->dev, "%s: mipi_stat_byte_cnt = 0x%08x", __func__, mipi_stat_byte_cnt);
+			dev_info(sd->dev, "%s: mipi_stat_pad_cnt = 0x%08x", __func__, mipi_stat_pad_cnt);
+			dev_info(sd->dev, "%s: mipi_stat_pkt_cnt = 0x%08x", __func__, mipi_stat_pkt_cnt);
+			dev_info(sd->dev, "%s: mipi_stat_inc_pkt_cnt = 0x%08x", __func__, mipi_stat_inc_pkt_cnt);
+			dev_info(sd->dev, "%s: mipi_stat_frame_period = 0x%08x", __func__, mipi_stat_frame_period);
+		}
         /*
         while (mipi_stat_frame_cnt < 20) {
-            ret = sensor_read_reg(client, 0x0000b104, &mipi_stat_frame_cnt);
-            ret = sensor_read_reg(client, 0x0000b108, &mipi_stat_long_pkt_cnt);
-            ret = sensor_read_reg(client, 0x0000b10c, &mipi_stat_pkt_timeout_cnt);
-            ret = sensor_read_reg(client, 0x0000b110, &mipi_stat_data_cnt);
+            ret = sensor->read_reg(sensor, 0x0000b104, &mipi_stat_frame_cnt);
+            ret = sensor->read_reg(sensor, 0x0000b108, &mipi_stat_long_pkt_cnt);
+            ret = sensor->read_reg(sensor, 0x0000b10c, &mipi_stat_pkt_timeout_cnt);
+            ret = sensor->read_reg(sensor, 0x0000b110, &mipi_stat_data_cnt);
             dev_info(sd->dev, "%s: mipi_stat_frame_cnt = 0x%08x", __func__, mipi_stat_frame_cnt);
             dev_info(sd->dev, "%s: mipi_stat_long_pkt_cnt = 0x%08x", __func__, mipi_stat_long_pkt_cnt);
             dev_info(sd->dev, "%s: mipi_stat_pkt_timeout_cnt = 0x%08x", __func__, mipi_stat_pkt_timeout_cnt);
@@ -554,12 +671,13 @@ static int sensor_pad_set_format (
 {
 	unsigned int buffsize;
 
-	struct i2c_client *client = v4l2_get_subdevdata(sd);
+	struct sensor_dev *sensor = sd_to_sensor_dev(sd);
+   	struct i2c_client *client = v4l2_get_subdevdata(&sensor->sd);
 	int ret;
 	u32 val;
 
 	// Get the packet size from the sensor
-	ret = sensor_read_reg(client, 0x0000B020UL, &val);
+	ret = sensor->read_reg(client, 0x0000B020UL, &val);
 	if (ret) 
 		return -EINVAL;
 	dev_info(sd->dev, "%s: mipi_packet_size = %d\n", __func__, val);
@@ -658,7 +776,7 @@ static const struct v4l2_subdev_internal_ops sensor_internal_ops = {
 	.open = sensor_open,
 };
 
-int gen4_init_sensor_dev(struct sensor_dev *sensor, struct i2c_client *client)
+static int init_sensor_dev(struct sensor_dev *sensor, struct i2c_client *client)
 {
     int ret;
 
@@ -676,14 +794,20 @@ int gen4_init_sensor_dev(struct sensor_dev *sensor, struct i2c_client *client)
 	sensor->pad.flags = MEDIA_PAD_FL_SOURCE;
 	ret = media_entity_pads_init(&sensor->sd.entity, 1, &sensor->pad);
 
-    return ret;
+	/* By default I2C register address is 32 bits. */
+	sensor->write_reg = sensor_write_reg_32;
+	sensor->read_reg = sensor_read_reg_32;
+
+	sensor->is_powered = false;
+
+	return ret;
 }
 
 /* System ID Register address */
 #define CCAM5_SYS_ID 0x14
 
 /* Identify the camera */
-int gen4_get_camera_id(struct sensor_dev *sensor, u32 *sensor_id)
+static int get_camera_id(struct sensor_dev *sensor, u32 *sensor_id)
 {
    	struct i2c_client *client = v4l2_get_subdevdata(&sensor->sd);
     int ret;
@@ -693,14 +817,14 @@ int gen4_get_camera_id(struct sensor_dev *sensor, u32 *sensor_id)
 	if (ret) 
         return ret;
 
-	ret = sensor_read_reg(client, CCAM5_SYS_ID, sensor_id);
+	ret = sensor->read_reg(client, CCAM5_SYS_ID, sensor_id);
 
     sensor_set_power(sensor, 0);
     return ret;
 
 }
 
-int gen4_sensor_remove(struct i2c_client *client)
+static int sensor_remove(struct i2c_client *client)
 {
 	struct v4l2_subdev *sd = i2c_get_clientdata(client);
 	struct sensor_dev *sensor = sd_to_sensor_dev(sd);
@@ -714,5 +838,132 @@ int gen4_sensor_remove(struct i2c_client *client)
 	return 0;
 }
 
+static int sensor_probe(struct i2c_client *client) {
+	struct sensor_dev *sensor;
+	u32 sensor_id;
+	int ret;
+
+	sensor = devm_kzalloc(&client->dev, sizeof(*sensor), GFP_KERNEL);
+	if (!sensor)
+		return -ENOMEM;
+
+	mutex_init(&sensor->mutex);
+
+	/* Get pin information from the device tree. */
+	sensor->pwdn_gpio = devm_gpiod_get(&client->dev, "pwdn",
+						    GPIOD_OUT_HIGH);
+	if (IS_ERR(sensor->pwdn_gpio)) {
+		dev_err(&client->dev, "failed to request power down pin.");
+		goto error_probe;
+	}
+	sensor->reset_gpio = devm_gpiod_get(&client->dev, "rst",
+						     GPIOD_OUT_HIGH);
+	if (IS_ERR(sensor->reset_gpio)) {
+		dev_err(&client->dev, "failed to request power down pin.");
+		goto error_probe;
+	}
+
+	gpiod_set_value(sensor->reset_gpio, 0);
+	gpiod_set_value(sensor->pwdn_gpio, 0);
+
+	/* Initialize subdev */
+    ret = init_sensor_dev(sensor, client);
+	if (ret) {
+		dev_err(&client->dev, "failed to initialize subdev: %d.", ret);
+		goto error_probe;
+	}
+
+	strscpy(sensor->sd.name, PSEE_EB_DRV_NAME, sizeof(sensor->sd.name));
+	dev_info(&client->dev, "%s Subdev initialized\n", sensor->sd.name);
+
+	/* Identify the camera trying with a 32-bit address first (IMX636, GEN41) */
+	ret = get_camera_id(sensor, &sensor_id);
+	if (sensor_id == 0xa0401806UL) {
+		dev_info(&client->dev, "Prophesee IMX636 (id: 0x%x) sensor detected", sensor_id);
+		sensor->id = IMX636;
+		sensor->issd_size =  imx636_issd(&sensor->issd);
+		ret = init_controls(sensor);
+	}
+	else if (sensor_id == 0xa0301002UL) {
+		dev_info(&client->dev, "Prophesee Gen41 ES (id: 0x%x) sensor detected", sensor_id);
+		sensor->id = GEN41;
+		sensor->issd_size =  gen41_issd(&sensor->issd);
+		ret = init_controls(sensor);
+	}
+	else {
+		/* Try again with a 16-bit address (GenX320) */
+		sensor->write_reg = sensor_write_reg_16;
+		sensor->read_reg = sensor_read_reg_16;
+		ret = get_camera_id(sensor, &sensor_id);
+		if (ret) {
+			dev_err(&client->dev, "failed to identify the sensor.");
+			goto error_handler_free;
+		}
+		if (sensor_id == 0x30501C01UL) {
+			dev_info(&client->dev, "Prophesee genX320 (id: 0x%x) sensor detected", sensor_id);
+			sensor->id = GENX320;
+			sensor->issd_size =  genx320_issd(&sensor->issd);
+			ret = init_controls(sensor);
+		}
+		else {
+			sensor->id = UNKNOWN;
+			dev_err(&client->dev, "Unknown sensor: %d.", sensor_id);
+			ret = -ENODEV;
+			goto error_handler_free;
+		}
+	}
+
+	dev_info(&client->dev, "Default ISSD sequence", issd_idx);
+	sensor->issd_idx = issd_idx;
+
+	ret = v4l2_async_register_subdev(&sensor->sd);
+	if (ret) {
+		dev_err(&client->dev, "Failed to register subdev.\n");
+		goto error_media_entity;
+	}
+
+	return 0;
+
+error_media_entity:
+	media_entity_cleanup(&sensor->sd.entity);
+
+error_handler_free:
+	v4l2_ctrl_handler_free(&sensor->ctrl_handler);
+
+error_probe:
+	mutex_destroy(&sensor->mutex);
+
+	return ret;
+}
+
+static const struct i2c_device_id sensor_id[] = {
+        {"psee_imx636", 0},
+        {},
+};
+MODULE_DEVICE_TABLE(i2c, sensor_id);
+
+static const struct of_device_id sensor_dt_of_match[] = {
+        { .compatible = "psee,eb_sensor_ctl" },
+        {},
+};
+MODULE_DEVICE_TABLE(of, sensor_dt_of_match);
+
+static struct i2c_driver sensor_i2c_driver = {
+        .driver = {
+                .owner = THIS_MODULE,
+                .name  = PSEE_EB_DRV_NAME,
+                .of_match_table = of_match_ptr(sensor_dt_of_match),
+        },
+        .id_table = sensor_id,
+        .probe_new = sensor_probe,
+        .remove   = sensor_remove,
+};
+
+module_i2c_driver(sensor_i2c_driver);
+
+MODULE_AUTHOR("Prophesee");
+MODULE_DESCRIPTION(PSEE_EB_DRV_DESC);
+MODULE_LICENSE("GPL");
+MODULE_VERSION("1.0");
 
 

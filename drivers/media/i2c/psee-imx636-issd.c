@@ -11,41 +11,16 @@
  * under the License.
  *
  ********************************************************************************/
-#include <linux/clk.h>
-#include <linux/clk-provider.h>
-#include <linux/clkdev.h>
-#include <linux/ctype.h>
-#include <linux/delay.h>
-#include <linux/device.h>
-#include <linux/gpio/consumer.h>
-#include <linux/i2c.h>
-#include <linux/init.h>
-#include <linux/module.h>
-#include <linux/of_device.h>
-#include <linux/regulator/consumer.h>
-#include <linux/slab.h>
-#include <linux/types.h>
-#include <media/v4l2-async.h>
-#include <media/v4l2-ctrls.h>
-#include <media/v4l2-device.h>
-#include <media/v4l2-event.h>
-#include <media/v4l2-fwnode.h>
-#include <media/v4l2-subdev.h>
+
 #include "psee-issd.h"
-#include "psee-gen4-ops.h"
 
-static unsigned int issd_idx;
-module_param(issd_idx, uint, 0444);
-MODULE_PARM_DESC(issd_idx,
-                 "PSEE IMX636 sensor driver: default issd_idx=0 for streaming");
+/* ========================================================================================================================================== */
+/*                                                             IMX636 ISSDS                                                                    */
+/* ========================================================================================================================================== */
 
-#define IMX636_DRV_NAME "psee-imx636"
-#define IMX636_DRV_DESC "PSEE IMX636 sensor driver"
-
-
-/* =================================================================================================================== */
-/*                                          STREAMING SEQUENCE                                                         */
-/* =================================================================================================================== */
+/* ------------------------------------------------------------------------------------------------------------------- */
+/*                                          STREAMING SEQUENCES                                                         */
+/* ------------------------------------------------------------------------------------------------------------------- */
 static const struct reg_op imx636_issd_stream_init_seq[] = {
   // While loop
   // Read and check add=0x00400010, rdata=0xCAFEBABE
@@ -221,9 +196,9 @@ static const struct issd imx636_issd_stream = {
 };
 
 
-/* =================================================================================================================== */
-/*                                              ??? PATTERNS                                                          */
-/* =================================================================================================================== */
+/* ------------------------------------------------------------------------------------------------------------------- */
+/*                                              ??? SEQUENCES                                                          */
+/* ------------------------------------------------------------------------------------------------------------------- */
 static const struct reg_op imx636_issd_timebases_sync_init_seq[] = {
     // Config PLL: pll internal clock = 10 MHz, pll output clock 1600 MHz
     {.op   = PSEE_WRITE,
@@ -399,9 +374,9 @@ static const struct issd imx636_issd_timebases_sync = {
                 .name = "imx636_issd_timebases_sync_destroy_seq"},
 };
 
-/* =================================================================================================================== */
-/*                                              TEST PATTERNS                                                          */
-/* =================================================================================================================== */
+/* ------------------------------------------------------------------------------------------------------------------- */
+/*                                              TEST SEQUENCES                                                          */
+/* ------------------------------------------------------------------------------------------------------------------- */
 static const struct reg_op imx636_issd_test_pattern_init_seq[] = {
     /* Pll power down and switch */
     {.op = PSEE_WRITE, .args = {.write = {0x00000000, 0x4f006402}}},
@@ -529,109 +504,3 @@ unsigned int imx636_issd(const struct issd **issd_array[])
     *issd_array = imx636_issds;
     return ARRAY_SIZE(imx636_issds);
 }
-
-static int sensor_probe(struct i2c_client *client) {
-	struct sensor_dev *sensor;
-	u32 sensor_id;
-	int ret;
-
-	sensor = devm_kzalloc(&client->dev, sizeof(*sensor), GFP_KERNEL);
-	if (!sensor)
-		return -ENOMEM;
-
-	mutex_init(&sensor->mutex);
-
-	/* Get pin information from the device tree. */
-	sensor->pwdn_gpio = devm_gpiod_get(&client->dev, "pwdn",
-						    GPIOD_OUT_HIGH);
-	if (IS_ERR(sensor->pwdn_gpio)) {
-		dev_err(&client->dev, "failed to request power down pin.");
-		goto error_probe;
-	}
-	sensor->reset_gpio = devm_gpiod_get(&client->dev, "rst",
-						     GPIOD_OUT_HIGH);
-	if (IS_ERR(sensor->reset_gpio)) {
-		dev_err(&client->dev, "failed to request power down pin.");
-		goto error_probe;
-	}
-
-	/* Initialize subdev */
-    ret = gen4_init_sensor_dev(sensor, client);
-	if (ret) {
-		dev_err(&client->dev, "failed to initialize subdev: %d.", ret);
-		goto error_probe;
-	}
-
-	strscpy(sensor->sd.name, IMX636_DRV_NAME, sizeof(sensor->sd.name));
-	dev_info(&client->dev, "%s Subdev initialized\n", sensor->sd.name);
-
-	/* Identify the camera */
-    ret = gen4_get_camera_id(sensor, &sensor_id);
-	if (ret) {
-		dev_err(&client->dev, "failed to identify the sensor.");
-		goto error_handler_free;
-	}
-
-	if (sensor_id == 0xa0401806) {
-		dev_info(&client->dev, "Prophesee IMX636 (id: 0x%x) sensor detected", sensor_id);
-		sensor->issd_size =  imx636_issd(&sensor->issd);
-    	sensor->issd_idx = issd_idx;
-		ret = gen4_ctl_init_controls(sensor);
-
-	}
-	else {
-		dev_err(&client->dev, "Not a Prophesee IMX636 sensor: %d.", sensor_id);
-		ret = -ENODEV;
-	}
-
-	ret = v4l2_async_register_subdev(&sensor->sd);
-	if (ret) {
-		dev_err(&client->dev, "Failed to register subdev.\n");
-		goto error_media_entity;
-	}
-
-	return 0;
-
-error_media_entity:
-	media_entity_cleanup(&sensor->sd.entity);
-
-error_handler_free:
-	v4l2_ctrl_handler_free(&sensor->ctrl_handler);
-
-error_probe:
-	mutex_destroy(&sensor->mutex);
-
-	return ret;
-}
-
-static const struct i2c_device_id sensor_id[] = {
-        {"psee_imx636", 0},
-        {},
-};
-MODULE_DEVICE_TABLE(i2c, sensor_id);
-
-static const struct of_device_id sensor_dt_of_match[] = {
-        { .compatible = "psee,imx636" },
-        {},
-};
-MODULE_DEVICE_TABLE(of, sensor_dt_of_match);
-
-static struct i2c_driver sensor_i2c_driver = {
-        .driver = {
-                .owner = THIS_MODULE,
-                .name  = IMX636_DRV_NAME,
-                .of_match_table = of_match_ptr(sensor_dt_of_match),
-        },
-        .id_table = sensor_id,
-        .probe_new = sensor_probe,
-        .remove   = gen4_sensor_remove,
-};
-
-module_i2c_driver(sensor_i2c_driver);
-
-MODULE_AUTHOR("Prophesee");
-MODULE_DESCRIPTION(IMX636_DRV_DESC);
-MODULE_LICENSE("GPL");
-MODULE_VERSION("1.0");
-
-

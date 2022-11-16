@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0
 
-psee-imx636-objs       := psee-gen4-ops.o psee-imx636.o
-obj-$(CONFIG_VIDEO_PSEE_IMX636)  += psee-imx636.o
-
-psee-gen41-objs        := psee-gen4-ops.o psee-gen41.o
-obj-$(CONFIG_VIDEO_PSEE_GEN41)  += psee-gen41.o
+psee-eb-ctl-module-objs       := psee-eb-ctl.o psee-imx636-issd.o psee-gen41-issd.o psee-genx320-issd.o
+obj-$(CONFIG_VIDEO_PSEE_EB_CTL)  += psee-eb-ctl-module.o
 
 msp3400-objs	:=	msp3400-driver.o msp3400-kthreads.o
 obj-$(CONFIG_VIDEO_MSP3400) += msp3400.o

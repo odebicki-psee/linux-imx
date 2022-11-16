@@ -649,27 +649,18 @@
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_i2c3>;
 	status = "okay";
-/*
-	gen41: gen41@3c {
-		compatible = "psee,gen41";
-		status = "okay";
-		reg = <0x3c>;
-		pwdn-gpios = <&gpio2 11 GPIO_ACTIVE_HIGH>;
-		rst-gpios = <&gpio2 10 GPIO_ACTIVE_HIGH>;
 
-		port {
-			psee_ep: endpoint {
-				remote-endpoint = <&mipi1_sensor_ep>;
-			};
-		};
-	};
-    */
-	imx636: imx636@3c {
-		compatible = "psee,imx636";
+	psee_eb_sensor: psee_eb_sensor@3c {
+		compatible = "psee,eb_sensor_ctl";
 		status = "okay";
 		reg = <0x3c>;
-		pwdn-gpios = <&gpio2 11 GPIO_ACTIVE_HIGH>;
-		rst-gpios = <&gpio2 10 GPIO_ACTIVE_HIGH>;
+		/* 96 Boards Adaptor Rev A: */
+		/*pwdn-gpios = <&gpio2 11 GPIO_ACTIVE_HIGH>;
+		rst-gpios = <&gpio2 10 GPIO_ACTIVE_HIGH>;*/
+		
+		/* 96 Boards Adaptor Rev B: */
+		pwdn-gpios = <&gpio1 5 GPIO_ACTIVE_HIGH>;
+		rst-gpios = <&gpio3 13 GPIO_ACTIVE_HIGH>;
 
 		port {
 			psee_ep: endpoint {
