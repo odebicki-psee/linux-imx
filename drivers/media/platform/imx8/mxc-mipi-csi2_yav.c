@@ -41,7 +41,7 @@ MODULE_PARM_DESC(debug, "Debug level (0-2)");
 #define	GPR_CSI2_1_AUTO_PD_EN 		BIT(9)
 #define	GPR_CSI2_1_CONT_CLK_MODE 	BIT(8)
 #define	GPR_CSI2_1_S_PRG_RXHS_SETTLE(x)	(((x) & 0x3F) << 2)
-#define	GPR_CSI2_1_RX_RCAL		(3)
+#define	GPR_CSI2_1_RX_RCAL(x)		((x) & 0x3)
 
 static u8 rxhs_settle[2] = { 0x14, 0x9 };
 
@@ -51,9 +51,11 @@ static struct mxc_mipi_csi2_dev *sd_to_mxc_mipi_csi2_dev(struct v4l2_subdev
 	return container_of(sdev, struct mxc_mipi_csi2_dev, sd);
 }
 
-#ifdef debug
+//#ifdef debug
+#if 1
 static void mxc_mipi_csi2_reg_dump(struct mxc_mipi_csi2_dev *csi2dev)
 {
+	int val;
 	printk("MIPI CSI2 HC register dump, mipi csi%d\n", csi2dev->id);
 	printk("MIPI CSI2 HC num of lanes     0x100 = 0x%x\n",
 	       readl(csi2dev->base_regs + 0x100));
@@ -61,8 +63,9 @@ static void mxc_mipi_csi2_reg_dump(struct mxc_mipi_csi2_dev *csi2dev)
 	       readl(csi2dev->base_regs + 0x104));
 	printk("MIPI CSI2 HC BIT ERR          0x108 = 0x%x\n",
 	       readl(csi2dev->base_regs + 0x108));
+	val = readl(csi2dev->base_regs + 0x10C);
 	printk("MIPI CSI2 HC IRQ STATUS       0x10C = 0x%x\n",
-	       readl(csi2dev->base_regs + 0x10C));
+	       val);
 	printk("MIPI CSI2 HC IRQ MASK         0x110 = 0x%x\n",
 	       readl(csi2dev->base_regs + 0x110));
 	printk("MIPI CSI2 HC ULPS STATUS      0x114 = 0x%x\n",
@@ -181,10 +184,12 @@ static int mxc_mipi_csi2_phy_gpr(struct mxc_mipi_csi2_dev *csi2dev)
 				   0x3FFF,
 				   GPR_CSI2_1_RX_ENABLE |
 				   GPR_CSI2_1_VID_INTFC_ENB |
+				   GPR_CSI2_1_AUTO_PD_EN |
 				   GPR_CSI2_1_HSEL |
 				   GPR_CSI2_1_CONT_CLK_MODE |
 				   GPR_CSI2_1_S_PRG_RXHS_SETTLE(csi2dev->
-								hs_settle));
+								hs_settle) |
+					GPR_CSI2_1_RX_RCAL(2));
 	}
 
 	return ret;
@@ -326,7 +331,6 @@ static int mipi_csi2_s_stream(struct v4l2_subdev *sd, int enable)
 		}
 		v4l2_subdev_call(sensor_sd, video, s_stream, true);
 		csi2dev->running++;
-
 	} else {
 
 		v4l2_subdev_call(sensor_sd, video, s_stream, false);
