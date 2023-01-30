@@ -381,7 +381,8 @@
 	port {
 		mipi1_sensor_ep: endpoint@0 {
 			remote-endpoint = <&psee_ep>;
-			data-lanes = <1 2>;
+			data-lanes = <1>;
+			/*data-lanes = <1 2>;*/
 			/* csis-hs-settle and csis-clk-settle are not used with the iMX8M 
 			(https://community.nxp.com/t5/i-MX-Processors/iMX8M-MIPI-CSI-4-lane-configuration/m-p/875763/highlight/true#M132950)
 			csis-hs-settle = <17>;
