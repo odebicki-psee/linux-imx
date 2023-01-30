@@ -72,8 +72,9 @@ static const struct reg_op imx636_issd_stream_init_seq[] = {
   {.op = PSEE_WRITE, .args = {.write = {0x0000B0A0, 0x00000037}}}, // mipi global operation THS TRAIL time control 
   {.op = PSEE_WRITE, .args = {.write = {0x0000B0A4, 0x0000002F}}}, // mipi global operation TLPX time control 
   {.op = PSEE_WRITE, .args = {.write = {0x0000B0AC, 0x00000028}}}, // ** TXCLKESC freq
-  {.op = PSEE_WRITE, .args = {.write = {0x0000B0CC, 0x00000001}}}, // DPHY clock divider: 8 div
-  {.op = PSEE_WRITE, .args = {.write = {0x0000B000, 0x000003D8}}}, // line + frame blanking, clock lane in LPS for line and frame blanking, Data lane 1 & 2
+  {.op = PSEE_WRITE, .args = {.write = {0x0000B0CC, 0x00000001}}}, // DPHY clock divider: 2
+  //{.op = PSEE_WRITE, .args = {.write = {0x0000B000, 0x000003D8}}}, // line + frame blanking, clock lane in LPS for line and frame blanking, Data lane 1 & 2
+  {.op = PSEE_WRITE, .args = {.write = {0x0000B000, 0x000003C8}}}, // line + frame blanking, clock lane in LPS for line and frame blanking, Data lane 1
   {.op = PSEE_WRITE, .args = {.write = {0x0000B004, 0x0000008A}}}, // escape clock = system clock / 10
   {.op = PSEE_WRITE, .args = {.write = {0x0000B01C, 0x0000005E}}}, // *** Data Itentifier: Modified for i.MX8 (0x30 by default)
   {.op = PSEE_WRITE, .args = {.write = {0x0000B020, 0x00001000}}}, // Packet size Max: 16KB 0x00004000
@@ -99,7 +100,8 @@ static const struct reg_op imx636_issd_stream_init_seq[] = {
   {.op = PSEE_DELAY, .args = {.delay = {200}}},
 */
   {.op = PSEE_WRITE, .args = {.write = {0x0000B044, 0x00000001}}}, // DPHY Startup signal
-  {.op = PSEE_WRITE, .args = {.write = {0x0000B000, 0x000003D9}}}, // csi enable, line + frame blanking, clock lane in LPS for line and frame blanking, Data lane 1 & 2
+  //{.op = PSEE_WRITE, .args = {.write = {0x0000B000, 0x000003D9}}}, // csi enable, line + frame blanking, clock lane in LPS for line and frame blanking, Data lane 1 & 2
+  {.op = PSEE_WRITE, .args = {.write = {0x0000B000, 0x000003C9}}}, // csi enable, line + frame blanking, clock lane in LPS for line and frame blanking, Data lane 1
   {.op = PSEE_WRITE, .args = {.write = {0x00009008, 0x00000644}}}, // time base is enabled 1us tick = pll / 100
   {.op = PSEE_WRITE, .args = {.write = {0x00000004, 0xF0005042}}}, // ??? ROI programming: ROI slope 10ns
   {.op = PSEE_WRITE, .args = {.write = {0x00000018, 0x00000200}}}, // ??? Spare control
@@ -118,7 +120,8 @@ static const struct reg_op imx636_issd_stream_start_seq[] = {
   {.op = PSEE_WRITE, .args = {.write = {0x0000B100UL, 0x000001}}}, // Enable stat counter 
 //  {.op = PSEE_WRITE, .args = {.write = {0x00008010, 0x00000002}}}, // Enable the MIPI pattern generator
   {.op = PSEE_WRITE, .args = {.write = {0x00009000UL, 0x00000208}}}, 
-  {.op = PSEE_WRITE, .args = {.write = {0x0000B000, 0x000003D9}}},                        // 0x119 in SSS product spec
+  //{.op = PSEE_WRITE, .args = {.write = {0x0000B000, 0x000003D9}}},                        // 0x119 in SSS product spec
+  {.op = PSEE_WRITE, .args = {.write = {0x0000B000, 0x000003C9}}},                        // 0x119 in SSS product spec
   {.op = PSEE_WRITE, .args = {.write = {0x00009028, 0x00000000}}},
   {.op = PSEE_WRITE, .args = {.write = {0x00009008, 0x00000645}}}, //RegisterOperation::WriteField(0x00009008, 0x645, 0x00000001)}}}
   // Analog START
