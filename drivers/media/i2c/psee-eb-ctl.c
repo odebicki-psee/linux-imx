@@ -547,6 +547,7 @@ static int sensor_video_s_stream (struct v4l2_subdev *sd, int enable)
 	struct sensor_dev *sensor = sd_to_sensor_dev(sd);
 	struct i2c_client *client = v4l2_get_subdevdata(&sensor->sd);
 	u32 mipi_stat_frame_cnt, mipi_stat_byte_cnt, mipi_stat_pad_cnt, mipi_stat_pkt_cnt, mipi_stat_inc_pkt_cnt, mipi_stat_frame_period;
+	int i = 0;
 
 	const struct issd *issd = sensor_issd(sensor);
 	int ret = 0;
@@ -561,9 +562,14 @@ static int sensor_video_s_stream (struct v4l2_subdev *sd, int enable)
     dev_info(sd->dev, "%s: pipeline_control = 0x%08x", __func__, pipeline_control);
 
 	ret = sensor_exec(sensor, (enable) ? &issd->start : &issd->stop);
+	//if (enable == 0)
+	//	ret = sensor_exec(sensor, &issd->stop);
+	
     if (enable) {
 		mipi_stat_frame_cnt = 0;
-        while (mipi_stat_frame_cnt < 20) {
+		/* GenX320 
+		
+        while (i++ < 20) {
 			sensor->read_reg(client, 0x0000b084, &mipi_stat_frame_cnt);
 			sensor->read_reg(client, 0x0000b088, &mipi_stat_byte_cnt);
 			sensor->read_reg(client, 0x0000b08c, &mipi_stat_pad_cnt);
@@ -576,8 +582,10 @@ static int sensor_video_s_stream (struct v4l2_subdev *sd, int enable)
 			dev_info(sd->dev, "%s: mipi_stat_pkt_cnt = 0x%08x", __func__, mipi_stat_pkt_cnt);
 			dev_info(sd->dev, "%s: mipi_stat_inc_pkt_cnt = 0x%08x", __func__, mipi_stat_inc_pkt_cnt);
 			dev_info(sd->dev, "%s: mipi_stat_frame_period = 0x%08x", __func__, mipi_stat_frame_period);
+
 		}
-        /*
+		*/
+        /* IMX636
         while (mipi_stat_frame_cnt < 20) {
             ret = sensor->read_reg(sensor, 0x0000b104, &mipi_stat_frame_cnt);
             ret = sensor->read_reg(sensor, 0x0000b108, &mipi_stat_long_pkt_cnt);
@@ -680,7 +688,8 @@ static int sensor_pad_set_format (
 	ret = sensor->read_reg(client, 0x0000B020UL, &val);
 	if (ret) 
 		return -EINVAL;
-	dev_info(sd->dev, "%s: mipi_packet_size = %d\n", __func__, val);
+	dev_info(sd->dev, "%s:%d: mipi_packet_size = %d\n", __func__, __LINE__, val);
+	dev_info(sd->dev, "%s:%d: format = 0x%x\n", __func__, __LINE__, fmt->format.code);
 
 	/* if (fmt->format.code == MEDIA_BUS_FMT_Y8_1X8) {
 		dev_info(sd->dev, "%s:%d MEDIA_BUS_FMT_Y8_1X8\n", __func__, __LINE__);
@@ -842,6 +851,7 @@ static int sensor_probe(struct i2c_client *client) {
 	struct sensor_dev *sensor;
 	u32 sensor_id;
 	int ret;
+	uint32_t dummy_reg;
 
 	sensor = devm_kzalloc(&client->dev, sizeof(*sensor), GFP_KERNEL);
 	if (!sensor)
@@ -904,6 +914,10 @@ static int sensor_probe(struct i2c_client *client) {
 			sensor->id = GENX320;
 			sensor->issd_size =  genx320_issd(&sensor->issd);
 			ret = init_controls(sensor);
+			/*do {
+				ret = sensor->write_reg(client, 0x9008UL, 0x00000320);
+				ret = sensor->read_reg(client, 0x9008UL, &dummy_reg);
+			} while (dummy_reg != 0x00000320);*/
 		}
 		else {
 			sensor->id = UNKNOWN;
@@ -928,6 +942,8 @@ error_media_entity:
 	media_entity_cleanup(&sensor->sd.entity);
 
 error_handler_free:
+	gpiod_set_value(sensor->reset_gpio, 1);
+	gpiod_set_value(sensor->pwdn_gpio, 1);
 	v4l2_ctrl_handler_free(&sensor->ctrl_handler);
 
 error_probe:
